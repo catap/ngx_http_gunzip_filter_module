@@ -126,6 +126,8 @@ ngx_http_gunzip_header_filter(ngx_http_request_t *r)
     conf = ngx_http_get_module_loc_conf(r, ngx_http_gunzip_filter_module);
 
     /* TODO support multiple content-codings */
+    /* TODO always gunzip - due to configuration or module request */
+    /* TODO ignore content encoding? */
 
     if (!conf->enable
         || r->headers_out.content_encoding == NULL

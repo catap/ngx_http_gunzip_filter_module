@@ -1,9 +1,16 @@
 Gunzip module for nginx.
 
-This module allows ungzipping responses returned with Content-Encoding: gzip
+This module allows gunzipping responses returned with Content-Encoding: gzip
 for clients that doesn't support it.  It may be usefull if you prefer to store
 data compressed (to save space or disk/network IO) but do not want to penalize
 clients without gzip support.
+
+Note well: only responses with Content-Encoding set to gzip before this module
+are handled (e.g. using "add_header Content-Encoding gzip;" isn't enough as it
+happens after).  As of now only proxy and fastcgi are able to do so.
+
+This module was designed to work with nginx 0.8.* (though it should work with
+0.7.* too).
 
 Configuration directives:
 
@@ -25,6 +32,7 @@ Usage:
 
     location /storage/ {
         gunzip on;
+        ...
     }
 
 To compile nginx with gunzip module, use "--add-module <path>" option to nginx
