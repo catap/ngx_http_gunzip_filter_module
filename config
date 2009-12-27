@@ -3,6 +3,9 @@
 
 ngx_addon_name="ngx_http_gunzip_filter_module"
 
+have=NGX_HTTP_GZIP . auto/have
+USE_ZLIB=YES
+
 HTTP_AUX_FILTER_MODULES="$HTTP_AUX_FILTER_MODULES \
 		ngx_http_gunzip_filter_module"
 
