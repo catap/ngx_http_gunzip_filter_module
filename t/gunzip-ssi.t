@@ -20,7 +20,7 @@ select STDOUT; $| = 1;
 eval { require IO::Compress::Gzip; };
 Test::More::plan(skip_all => "IO::Compress::Gzip not found") if $@;
 
-my $t = Test::Nginx->new()->has('--with-http_gzip_static_module')->plan(4);
+my $t = Test::Nginx->new()->has(qw/http ssi proxy gzip_static/)->plan(4);
 
 $t->write_file_expand('nginx.conf', <<'EOF');
 
