@@ -57,7 +57,19 @@ http {
 
 EOF
 
-$t->run_daemon('memcached', '-l', '127.0.0.1', '-p', '8081');
+my $memhelp = `memcached -h`;
+my @memopts = ();
+
+if ($memhelp =~ /repcached/) {
+	# repcached patch adds additional listen socket
+	push @memopts, '-X', '8082';
+}
+if ($memhelp =~ /-U/) {
+	# UDP port is on by default in memcached 1.2.7+
+	push @memopts, '-U', '0';
+}
+
+$t->run_daemon('memcached', '-l', '127.0.0.1', '-p', '8081', @memopts);
 
 eval {
 	open OLDERR, ">&", \*STDERR; close STDERR;
