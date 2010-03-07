@@ -20,7 +20,7 @@ select STDOUT; $| = 1;
 eval { require IO::Compress::Gzip; };
 Test::More::plan(skip_all => "IO::Compress::Gzip not found") if $@;
 
-my $t = Test::Nginx->new()->has(qw/http proxy gzip_static/)->plan(12);
+my $t = Test::Nginx->new()->has(qw/http proxy gzip_static/)->plan(13);
 
 $t->write_file_expand('nginx.conf', <<'EOF');
 
@@ -77,6 +77,12 @@ $t->write_file('t1.gz', $out);
 $t->write_file('t2.gz', $out . $out);
 $t->write_file('t3', 'not compressed');
 
+my $emptyin = '';
+my $emptyout;
+IO::Compress::Gzip::gzip(\$emptyin => \$emptyout);
+
+$t->write_file('empty.gz', $emptyout);
+
 $t->run();
 
 ###############################################################################
@@ -101,5 +107,7 @@ like(http_get('/t1'), qr/Vary/, 'get vary');
 like(http_head('/t1'), qr/Vary/, 'head vary');
 unlike(http_get('/t3'), qr/Vary/, 'no vary on non-gzipped get');
 unlike(http_head('/t3'), qr/Vary/, 'no vary on non-gzipped head');
+
+like(http_get('/empty'), qr/ 200 /, 'gunzip empty');
 
 ###############################################################################

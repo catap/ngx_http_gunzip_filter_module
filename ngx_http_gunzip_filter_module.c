@@ -537,23 +537,18 @@ ngx_http_gunzip_filter_inflate(ngx_http_request_t *r,
 
     if (ctx->in == NULL) {
 
+        b = ctx->out_buf;
+
+        if (ngx_buf_size(b) == 0) {
+            return NGX_OK;
+        }
+
         cl = ngx_alloc_chain_link(r->pool);
         if (cl == NULL) {
             return NGX_ERROR;
         }
 
-        b = ctx->out_buf;
-
-        if (ngx_buf_size(b) == 0) {
-
-            b = ngx_calloc_buf(ctx->request->pool);
-            if (b == NULL) {
-                return NGX_ERROR;
-            }
-
-        } else {
-            ctx->zstream.avail_out = 0;
-        }
+        ctx->zstream.avail_out = 0;
 
         cl->buf = b;
         cl->next = NULL;
