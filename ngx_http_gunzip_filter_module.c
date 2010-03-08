@@ -138,7 +138,7 @@ ngx_http_gunzip_header_filter(ngx_http_request_t *r)
         return ngx_http_next_header_filter(r);
     }
 
-#if (nginx_version >= 8025 || nginx_version >= 7065)
+#if (nginx_version >= 8025 || (nginx_version >= 7065 && nginx_version < 8000))
 
     r->gzip_vary = 1;
 
