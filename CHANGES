@@ -1,0 +1,20 @@
+
+Changes with gunzip module 0.3 (2010-03-22):
+
+    *) Bugfix: the "[alert] zero size buf" error during gunzipping of
+       some files.
+       Thanks to Matthieu Tourne.
+
+    *) Bugfix: incorrect code was used for nginx 0.8.0 .. 0.8.24.  The bug
+       had appeared in gunzip module 0.2.
+
+
+Changes with gunzip module 0.2 (2010-02-01):
+
+    *) Feature: support for nginx 0.7.65.
+
+
+Changes with gunzip module 0.1 (2009-12-28):
+
+    *) The first public version.
+
