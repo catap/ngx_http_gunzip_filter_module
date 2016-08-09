@@ -2,6 +2,7 @@
 /*
  * Copyright (C) Igor Sysoev
  * Copyright (C) Maxim Dounin
+ * Copyright (C) Nginx, Inc.
  */
 
 
@@ -12,10 +13,17 @@
 
 #include <zlib.h>
 
+#define NGX_HTTP_GUNZIP_OFF     0
+#define NGX_HTTP_GUNZIP_ON      1
+#define NGX_HTTP_GUNZIP_ALWAYS  2
+#define NGX_HTTP_GUNZIP_TYPES   3
+
 
 typedef struct {
-    ngx_flag_t           enable;
+    ngx_uint_t           enable;
     ngx_bufs_t           bufs;
+    ngx_hash_t           types;
+    ngx_array_t         *types_keys;
 } ngx_http_gunzip_conf_t;
 
 
@@ -62,14 +70,23 @@ static char *ngx_http_gunzip_merge_conf(ngx_conf_t *cf,
     void *parent, void *child);
 
 
+static ngx_conf_enum_t  ngx_http_gunzip[] = {
+    { ngx_string("off"), NGX_HTTP_GUNZIP_OFF },
+    { ngx_string("on"), NGX_HTTP_GUNZIP_ON },
+    { ngx_string("always"), NGX_HTTP_GUNZIP_ALWAYS },
+    { ngx_string("types"), NGX_HTTP_GUNZIP_TYPES },
+    { ngx_null_string, 0 }
+};
+
 static ngx_command_t  ngx_http_gunzip_filter_commands[] = {
 
     { ngx_string("gunzip"),
-      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_FLAG,
-      ngx_conf_set_flag_slot,
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_HTTP_LIF_CONF
+                        |NGX_CONF_TAKE1,
+      ngx_conf_set_enum_slot,
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_gunzip_conf_t, enable),
-      NULL },
+      &ngx_http_gunzip },
 
     { ngx_string("gunzip_buffers"),
       NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE2,
@@ -77,6 +94,13 @@ static ngx_command_t  ngx_http_gunzip_filter_commands[] = {
       NGX_HTTP_LOC_CONF_OFFSET,
       offsetof(ngx_http_gunzip_conf_t, bufs),
       NULL },
+
+    { ngx_string("gunzip_types"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_1MORE,
+      ngx_http_types_slot,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_gunzip_conf_t, types_keys),
+      &ngx_http_html_default_types[0] },
 
       ngx_null_command
 };
@@ -126,10 +150,9 @@ ngx_http_gunzip_header_filter(ngx_http_request_t *r)
     conf = ngx_http_get_module_loc_conf(r, ngx_http_gunzip_filter_module);
 
     /* TODO support multiple content-codings */
-    /* TODO always gunzip - due to configuration or module request */
     /* TODO ignore content encoding? */
 
-    if (!conf->enable
+    if (conf->enable == NGX_HTTP_GUNZIP_OFF
         || r->headers_out.content_encoding == NULL
         || r->headers_out.content_encoding->value.len != 4
         || ngx_strncasecmp(r->headers_out.content_encoding->value.data,
@@ -142,22 +165,35 @@ ngx_http_gunzip_header_filter(ngx_http_request_t *r)
 
     r->gzip_vary = 1;
 
-    if (!r->gzip_tested) {
-        if (ngx_http_gzip_ok(r) == NGX_OK) {
-            return ngx_http_next_header_filter(r);
-        }
+    if (conf->enable == NGX_HTTP_GUNZIP_ON)
+    {
+        if (!r->gzip_tested) {
+            if (ngx_http_gzip_ok(r) == NGX_OK) {
+                return ngx_http_next_header_filter(r);
+            }
 
-    } else if (!r->gzip_ok) {
-        return ngx_http_next_header_filter(r);
+        } else if (r->gzip_ok) {
+                   return ngx_http_next_header_filter(r);
+        }
     }
 
 #else
 
-    if (ngx_http_gzip_ok(r) == NGX_OK) {
-        return ngx_http_next_header_filter(r);
+    if (conf->enable == NGX_HTTP_GUNZIP_ON)
+    {
+        if (ngx_http_gzip_ok(r) == NGX_OK) {
+            return ngx_http_next_header_filter(r);
+        }
     }
 
 #endif
+
+    else if (conf->enable == NGX_HTTP_GUNZIP_TYPES
+             && ngx_http_test_content_type(r, &conf->types) == NULL)
+    {
+             return ngx_http_next_header_filter(r);
+    }
+    /* else always gunzip - conf->enable == NGX_HTTP_GUNZIP_ALWAYS) */
 
     ctx = ngx_pcalloc(r->pool, sizeof(ngx_http_gunzip_ctx_t));
     if (ctx == NULL) {
@@ -175,6 +211,7 @@ ngx_http_gunzip_header_filter(ngx_http_request_t *r)
 
     ngx_http_clear_content_length(r);
     ngx_http_clear_accept_ranges(r);
+    ngx_http_weak_etag(r);
 
     return ngx_http_next_header_filter(r);
 }
@@ -184,6 +221,7 @@ static ngx_int_t
 ngx_http_gunzip_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 {
     int                     rc;
+    ngx_uint_t              flush;
     ngx_chain_t            *cl;
     ngx_http_gunzip_ctx_t  *ctx;
 
@@ -218,9 +256,13 @@ ngx_http_gunzip_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
 
         cl = NULL;
 
-        ngx_chain_update_chains(&ctx->free, &ctx->busy, &cl,
+        ngx_chain_update_chains(r->pool, &ctx->free, &ctx->busy, &cl,
                                 (ngx_buf_tag_t) &ngx_http_gunzip_filter_module);
         ctx->nomem = 0;
+        flush = 0;
+
+    } else {
+        flush = ctx->busy ? 1 : 0;
     }
 
     for ( ;; ) {
@@ -267,7 +309,7 @@ ngx_http_gunzip_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
             /* rc == NGX_AGAIN */
         }
 
-        if (ctx->out == NULL) {
+        if (ctx->out == NULL && !flush) {
             return ctx->busy ? NGX_AGAIN : NGX_OK;
         }
 
@@ -277,7 +319,7 @@ ngx_http_gunzip_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
             goto failed;
         }
 
-        ngx_chain_update_chains(&ctx->free, &ctx->busy, &ctx->out,
+        ngx_chain_update_chains(r->pool, &ctx->free, &ctx->busy, &ctx->out,
                                 (ngx_buf_tag_t) &ngx_http_gunzip_filter_module);
         ctx->last_out = &ctx->out;
 
@@ -285,6 +327,7 @@ ngx_http_gunzip_body_filter(ngx_http_request_t *r, ngx_chain_t *in)
                        "gunzip out: %p", ctx->out);
 
         ctx->nomem = 0;
+        flush = 0;
 
         if (ctx->done) {
             return rc;
@@ -431,7 +474,7 @@ ngx_http_gunzip_filter_inflate(ngx_http_request_t *r,
     rc = inflate(&ctx->zstream, ctx->flush);
 
     if (rc != Z_OK && rc != Z_STREAM_END && rc != Z_BUF_ERROR) {
-        ngx_log_error(NGX_LOG_ALERT, r->connection->log, 0,
+        ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
                       "inflate() failed: %d, %d", ctx->flush, rc);
         return NGX_ERROR;
     }
@@ -509,9 +552,13 @@ ngx_http_gunzip_filter_inflate(ngx_http_request_t *r,
         return NGX_OK;
     }
 
-    if (rc == Z_STREAM_END && ctx->flush == Z_FINISH
-        && ctx->zstream.avail_in == 0)
-    {
+    if (ctx->flush == Z_FINISH && ctx->zstream.avail_in == 0) {
+
+        if (rc != Z_STREAM_END) {
+            ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                          "inflate() returned %d on response end", rc);
+            return NGX_ERROR;
+        }
 
         if (ngx_http_gunzip_filter_inflate_end(r, ctx) != NGX_OK) {
             return NGX_ERROR;
@@ -650,9 +697,11 @@ ngx_http_gunzip_create_conf(ngx_conf_t *cf)
      * set by ngx_pcalloc():
      *
      *     conf->bufs.num = 0;
+     *     conf->types = { NULL };
+     *     conf->types_keys = NULL;
      */
 
-    conf->enable = NGX_CONF_UNSET;
+    conf->enable = NGX_CONF_UNSET_UINT;
 
     return conf;
 }
@@ -664,10 +713,19 @@ ngx_http_gunzip_merge_conf(ngx_conf_t *cf, void *parent, void *child)
     ngx_http_gunzip_conf_t *prev = parent;
     ngx_http_gunzip_conf_t *conf = child;
 
-    ngx_conf_merge_value(conf->enable, prev->enable, 0);
+    ngx_conf_merge_value(conf->enable, prev->enable,
+                         NGX_HTTP_GUNZIP_OFF);
 
     ngx_conf_merge_bufs_value(conf->bufs, prev->bufs,
                               (128 * 1024) / ngx_pagesize, ngx_pagesize);
+
+    if (ngx_http_merge_types(cf, &conf->types_keys, &conf->types,
+                             &prev->types_keys, &prev->types,
+                             ngx_http_html_default_types)
+        != NGX_OK)
+    {
+            return NGX_CONF_ERROR;
+    }
 
     return NGX_CONF_OK;
 }
